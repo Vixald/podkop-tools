@@ -29,12 +29,6 @@ Podkop Tools не содержит собственных версий этих 
 ## Установка
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Vixald/podkop-tools/main/install.sh | sh
-```
-
-или
-
-```sh
 wget -qO- https://raw.githubusercontent.com/Vixald/podkop-tools/main/install.sh | sh
 ```
 

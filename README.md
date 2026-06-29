@@ -29,7 +29,7 @@ Podkop Tools не содержит собственных версий этих 
 ## Установка
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/Vixald/podkop-tools/main/install.sh | sh
+wget -qO /tmp/install.sh https://raw.githubusercontent.com/Vixald/podkop-tools/main/install.sh && sh /tmp/install.sh
 ```
 
 ## Меню

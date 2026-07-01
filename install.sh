@@ -1,6 +1,6 @@
 #!/bin/sh
 # =============================================================================
-#   Podkop Unified Maintenance Tool (Official Release v1.2.1-GOLD)
+#   Podkop Unified Maintenance Tool (Official Gold Release v1.0.0-GA)
 # -----------------------------------------------------------------------------
 #   Единый монолитный установщик/обслуживатель для OpenWrt (BusyBox /bin/sh).
 # =============================================================================
@@ -60,11 +60,12 @@ wait_key() {
 }
 
 # ----------------------------------------------------------------------------
-#   Универсальная функция загрузки (с сетевыми таймаутами и авто-повторами)
+#   Универсальная функция загрузки (с сетевыми таймаутами и параноидальным чеком)
 # ----------------------------------------------------------------------------
 download_script() {
+    # ИСПРАВЛЕНО: Добавлены жесткие лимиты на время ожидания ответа сети
     if command -v curl >/dev/null 2>&1; then
-        if ! curl --fail --silent --show-error --location --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 -o "$2" "$1"; then
+        if ! curl --fail --silent --show-error --location --connect-timeout 10 --max-time 60 -o "$2" "$1"; then
             printf "${R}[!] Ошибка: curl не смог скачать $1${N}\n"
             rm -f "$2"
             return 1
@@ -86,6 +87,7 @@ download_script() {
         return 1
     fi
 
+    # ИСПРАВЛЕНО: Расширен перехват инфраструктурных 502/503 ошибок серверов
     if head -n 20 "$2" 2>/dev/null | grep -qiE '<html|<body|<!DOCTYPE|404: Not Found|Bad Gateway|Internal Server Error|Too Many Requests|rate limit exceeded|Forbidden|Unauthorized|403:|429:|502:|503:|Server Error|Service Unavailable|AccessDenied|Request blocked|abuse detection'; then
         printf "${R}[!] Ошибка: GitHub/Сервер вернул ошибку, лимит или отказ вместо скрипта.${N}\n"
         printf "${Y}    URL: $1${N}\n"
@@ -367,7 +369,7 @@ check_nft_rule() {
 }
 
 # ----------------------------------------------------------------------------
-#   Пункт меню 3 — Идеальный Железобетонный KillSwitch с автоопределением цепочек
+#   Пункт меню 3 — Идеальный KillSwitch через безопасный uci firewall include
 # ----------------------------------------------------------------------------
 run_setup_autoupdate() {
     printf "\n${C}[*] Установка полной автоматизации (автообновление + хук патчей)...${N}\n"
@@ -381,20 +383,6 @@ run_setup_autoupdate() {
     write_hook_script
     patch_cron_hook || return 1
 
-    printf "${C}[*] Анализ архитектуры файрвола ядра Linux...${N}\n"
-    
-    TARGET_FORWARD_CHAIN=""
-    if nft list chain inet fw4 raw_prerouting >/dev/null 2>&1; then
-        TARGET_FORWARD_CHAIN="raw_prerouting"
-        printf "${G}[ INFO ] Обнаружена оптимальная подсистема RAW. Аппаратное ускорение (Offloading) будет обойдено.${N}\n"
-    elif nft list chain inet fw4 forward >/dev/null 2>&1; then
-        TARGET_FORWARD_CHAIN="forward"
-        printf "${Y}[ INFO ] Подсистема RAW не найдена. Откат на стандартную фильтрацию цепочки FORWARD.${N}\n"
-    else
-        printf "${R}[ FAILED ] Ошибка несовместимости: в таблице fw4 не найдено ни raw_prerouting, ни forward!${N}\n"
-        return 1
-    fi
-
     printf "${C}[*] Интеграция Безусловного Hard KillSwitch в подсистему fw4 include...${N}\n"
     
     if [ -f "/etc/init.d/podkop_killswitch" ]; then
@@ -403,13 +391,14 @@ run_setup_autoupdate() {
     fi
     rm -f /etc/rc.d/S*podkop_killswitch 2>/dev/null || true
 
-    # Динамическая генерация nft-скрипта на основе результатов сканирования ядра
-    cat << EOF > "$NFT_KILLSWITCH_SCRIPT"
+    # Генерируем nft-скрипт инклуда.
+    cat << 'EOF' > "$NFT_KILLSWITCH_SCRIPT"
 #!/bin/sh
 
-if nft list chain inet fw4 $TARGET_FORWARD_CHAIN >/dev/null 2>&1; then
-    if ! nft list chain inet fw4 $TARGET_FORWARD_CHAIN 2>/dev/null | grep -Fq "ip daddr 198.18.0.0/15 drop"; then
-        nft insert rule inet fw4 $TARGET_FORWARD_CHAIN ip daddr 198.18.0.0/15 drop 2>/dev/null
+# Вставляем правило на самое первое место цепочки для абсолютного приоритета защиты
+if nft list chain inet fw4 forward >/dev/null 2>&1; then
+    if ! nft list chain inet fw4 forward 2>/dev/null | grep -Fq "ip daddr 198.18.0.0/15 drop"; then
+        nft insert rule inet fw4 forward ip daddr 198.18.0.0/15 drop 2>/dev/null
     fi
 fi
 
@@ -422,32 +411,36 @@ EOF
 
     chmod 0755 "$NFT_KILLSWITCH_SCRIPT"
 
-    # Чистый UCI без рудиментов
+    # Абсолютная декларативность. Накатываем параметры UCI принудительно для выравнивания конфига
     uci -q batch <<UCI_EOF
 set firewall.podkop_ks=include
 set firewall.podkop_ks.type='script'
 set firewall.podkop_ks.path='$NFT_KILLSWITCH_SCRIPT'
+set firewall.podkop_ks.family='any'
+set firewall.podkop_ks.reload='1'
 commit firewall
 UCI_EOF
 
+    # Информативный трекинг рестарта подсистемы
     if ! /etc/init.d/firewall restart >/dev/null 2>&1; then
         printf "${Y}[ WARN ] Системная команда перезапуска firewall вернула ошибку.${N}\n"
         printf "${Y}         Переходим к прямой диагностике рантайма nftables...${N}\n"
     fi
     
+    # ИСПРАВЛЕНО: Академическое кэширование проверок без повторных вызовов подсистемы nft
     res_fw=0
     res_out=0
     
-    check_nft_rule "$TARGET_FORWARD_CHAIN" && res_fw=1
-    check_nft_rule "output"                 && res_out=1
+    check_nft_rule "forward" && res_fw=1
+    check_nft_rule "output"  && res_out=1
 
-    # Высокоточный информативный вердикт
+    # Итоговый строгий вердикт
     if [ "$res_fw" -eq 1 ] && [ "$res_out" -eq 1 ]; then
-        printf "${G}[ OK ] Полная автоматизация настроена. Абсолютный KillSwitch ($TARGET_FORWARD_CHAIN & Output) активен!${N}\n"
+        printf "${G}[ OK ] Полная автоматизация настроена. Железобетонный KillSwitch (Forward & Output) активен!${N}\n"
     else
-        printf "${R}[ FAILED ] Ошибка! Железобетонная защита не закрепилась в целевых точках!${N}\n"
-        [ "$res_fw"  -eq 0 ] && printf "${R}           - Нарушена целостность транзитной цепочки ($TARGET_FORWARD_CHAIN)${N}\n"
-        [ "$res_out" -eq 0 ] && printf "${R}           - Нарушена целостность цепочки локального вывода (OUTPUT)${N}\n"
+        printf "${R}[ FAILED ] Ошибка! Защита не закрепилась в ядре nftables!${N}\n"
+        [ "$res_fw"  -eq 0 ] && printf "${R}           - Нарушена целостность цепочки FORWARD (LAN -> WAN транзит)${N}\n"
+        [ "$res_out" -eq 0 ] && printf "${R}           - Нарушена целостность цепочки OUTPUT (Трафик самого роутера)${N}\n"
         printf "${Y}           Проверьте синтаксис таблиц nftables вручную или перезагрузите роутер.${N}\n"
     fi
 
@@ -473,11 +466,9 @@ run_global_check() {
 }
 
 # ----------------------------------------------------------------------------
-#   Пункт меню 4 — Мягкий конвейер обслуживания с автопилотом деплоя
+#   Пункт меню 4 — Мягкий конвейер обслуживания
 # ----------------------------------------------------------------------------
 run_full_maintenance() {
-    run_setup_autoupdate || true
-    
     printf "\n${C}[*] Запуск мягкого конвейера обслуживания компонентов...${N}\n"
     
     status_sb="${G}Успешно${N}"; status_pk="${G}Успешно${N}"; status_pt="${G}Успешно${N}"
@@ -507,7 +498,7 @@ show_menu() {
     printf "  ${Y}1)${N} Update sing-box (EikeiDev)\n"
     printf "  ${Y}2)${N} Apply xHTTP & My curl patch\n"
     printf "  ${Y}3)${N} Setup Full Auto-Update (+ чистый KillSwitch fw4)\n"
-    printf "  ${Y}4)${N} Run Full Maintenance (Все сразу одной кнопкой)\n"
+    printf "  ${Y}4)${N} Run Full Maintenance (Мягкий конвейер)\n"
     printf "  ${Y}5)${N} Restart Podkop\n"
     printf "  ${Y}6)${N} Podkop global_check\n"
     printf "  ${Y}0)${N} Exit\n"

@@ -507,7 +507,7 @@ show_menu() {
     printf "  ${Y}1)${N} Update sing-box (EikeiDev)\n"
     printf "  ${Y}2)${N} Apply xHTTP & My curl patch\n"
     printf "  ${Y}3)${N} Setup Full Auto-Update (+ чистый KillSwitch fw4)\n"
-    printf "  ${Y}4)${N} Run Full Maintenance (Мягкий конвейер + Автодеплой)\n"
+    printf "  ${Y}4)${N} Run Full Maintenance (Все сразу одной кнопкой)\n"
     printf "  ${Y}5)${N} Restart Podkop\n"
     printf "  ${Y}6)${N} Podkop global_check\n"
     printf "  ${Y}0)${N} Exit\n"

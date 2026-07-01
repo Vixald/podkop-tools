@@ -1,20 +1,14 @@
 #!/bin/sh
 # =============================================================================
-#  Podkop Unified Maintenance Tool
+#   Podkop Unified Maintenance Tool (Official Gold Release v1.0.0-GA)
 # -----------------------------------------------------------------------------
-#  Единый монолитный установщик/обслуживатель для OpenWrt (BusyBox /bin/sh).
-#  Объединяет:
-#     1. Автообновление Podkop            (irat25/podkop-auto-update)
-#     2. Обновление sing-box              (EikeiDev/OpenWRT-sing-box-extended)
-#     3. Патч xHTTP                       (moix89/podkop-xhttp-patch)
-#     4. Меню/цвета                       (Vixald/podkop-tools)
-#     5. Встроенный патч wget -> curl     (Vixald/podkop-tools/patches/20-curl-download.sh)
+#   Единый монолитный установщик/обслуживатель для OpenWrt (BusyBox /bin/sh).
 # =============================================================================
 
 set -u
 
 # ----------------------------------------------------------------------------
-#  ANSI-цвета (из Vixald/podkop-tools)
+#   ANSI-цвета
 # ----------------------------------------------------------------------------
 R="\033[1;31m"   # красный  — ошибки
 G="\033[1;32m"   # зелёный  — успех
@@ -23,7 +17,7 @@ C="\033[1;36m"   # голубой  — информация
 N="\033[0m"      # сброс
 
 # ----------------------------------------------------------------------------
-#  Источники (raw-ссылки)
+#   Источники (raw-ссылки)
 # ----------------------------------------------------------------------------
 PODKOP_AUTOUPDATE_INSTALL_URL="https://raw.githubusercontent.com/irat25/podkop-auto-update/main/install.sh"
 PODKOP_UPDATE_URL="https://raw.githubusercontent.com/irat25/podkop-auto-update/main/files/root/podkop-auto-update.sh"
@@ -31,7 +25,7 @@ SINGBOX_URL="https://raw.githubusercontent.com/EikeiDev/OpenWRT-sing-box-extende
 XHTTP_URL="https://raw.githubusercontent.com/moix89/podkop-xhttp-patch/main/install.sh"
 
 # ----------------------------------------------------------------------------
-#  Системные пути
+#   Системные пути
 # ----------------------------------------------------------------------------
 CRON_FILE="/etc/crontabs/root"
 HOOK_SCRIPT="/root/podkop-patch-hook.sh"
@@ -39,7 +33,7 @@ HELPERS="/usr/lib/podkop/helpers.sh"
 NFT_KILLSWITCH_SCRIPT="/usr/share/podkop_killswitch.nft"
 
 # ----------------------------------------------------------------------------
-#  Управление временными файлами и очистка
+#   Управление временными файлами и очистка
 # ----------------------------------------------------------------------------
 TMP_FILE=""
 
@@ -50,7 +44,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ----------------------------------------------------------------------------
-#  Определение Podkop
+#   Определение подсистемы Podkop
 # ----------------------------------------------------------------------------
 if [ -f "/opt/etc/init.d/podkop" ]; then
     PODKOP_INIT="/opt/etc/init.d/podkop"
@@ -66,17 +60,18 @@ wait_key() {
 }
 
 # ----------------------------------------------------------------------------
-#  Универсальная функция загрузки
+#   Универсальная функция загрузки (с сетевыми таймаутами и параноидальным чеком)
 # ----------------------------------------------------------------------------
 download_script() {
+    # ИСПРАВЛЕНО: Добавлены жесткие лимиты на время ожидания ответа сети
     if command -v curl >/dev/null 2>&1; then
-        if ! curl --fail --silent --show-error --location -o "$2" "$1"; then
+        if ! curl --fail --silent --show-error --location --connect-timeout 10 --max-time 60 -o "$2" "$1"; then
             printf "${R}[!] Ошибка: curl не смог скачать $1${N}\n"
             rm -f "$2"
             return 1
         fi
     elif command -v wget >/dev/null 2>&1; then
-        if ! wget -qO "$2" "$1"; then
+        if ! wget -T 60 -qO "$2" "$1"; then
             printf "${R}[!] Ошибка: wget не смог скачать $1${N}\n"
             rm -f "$2"
             return 1
@@ -92,8 +87,9 @@ download_script() {
         return 1
     fi
 
-    if head -n 20 "$2" 2>/dev/null | grep -qiE '<html|<body|<!DOCTYPE|404: Not Found|Bad Gateway|Internal Server Error|Too Many Requests|rate limit exceeded|Forbidden|Unauthorized|403:|429:|AccessDenied|Request blocked|abuse detection'; then
-        printf "${R}[!] Ошибка: GitHub/Сервер вернул блокировку, лимит или ошибку вместо скрипта.${N}\n"
+    # ИСПРАВЛЕНО: Расширен перехват инфраструктурных 502/503 ошибок серверов
+    if head -n 20 "$2" 2>/dev/null | grep -qiE '<html|<body|<!DOCTYPE|404: Not Found|Bad Gateway|Internal Server Error|Too Many Requests|rate limit exceeded|Forbidden|Unauthorized|403:|429:|502:|503:|Server Error|Service Unavailable|AccessDenied|Request blocked|abuse detection'; then
+        printf "${R}[!] Ошибка: GitHub/Сервер вернул ошибку, лимит или отказ вместо скрипта.${N}\n"
         printf "${Y}    URL: $1${N}\n"
         rm -f "$2"
         return 1
@@ -109,7 +105,7 @@ download_script() {
 }
 
 # ----------------------------------------------------------------------------
-#  Встроенный код патча wget -> curl (20-curl-download.sh)
+#   Встроенный код патча wget -> curl (20-curl-download.sh)
 # ----------------------------------------------------------------------------
 emit_curl_patch() {
 cat <<'CURL_PATCH_EOF'
@@ -363,8 +359,17 @@ patch_cron_hook() {
     return 0
 }
 
+check_nft_rule() {
+    if nft list chain inet fw4 "$1" >/dev/null 2>&1; then
+        if nft list chain inet fw4 "$1" 2>/dev/null | grep -Fq "ip daddr 198.18.0.0/15 drop"; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
 # ----------------------------------------------------------------------------
-#  Пункт меню 3 — Идеальный KillSwitch через безопасный uci firewall include
+#   Пункт меню 3 — Идеальный KillSwitch через безопасный uci firewall include
 # ----------------------------------------------------------------------------
 run_setup_autoupdate() {
     printf "\n${C}[*] Установка полной автоматизации (автообновление + хук патчей)...${N}\n"
@@ -378,7 +383,7 @@ run_setup_autoupdate() {
     write_hook_script
     patch_cron_hook || return 1
 
-    printf "${C}[*] Интеграция Умного Hard KillSwitch в официальную подсистему fw4 include...${N}\n"
+    printf "${C}[*] Интеграция Безусловного Hard KillSwitch в подсистему fw4 include...${N}\n"
     
     if [ -f "/etc/init.d/podkop_killswitch" ]; then
         /etc/init.d/podkop_killswitch disable >/dev/null 2>&1 || true
@@ -386,38 +391,28 @@ run_setup_autoupdate() {
     fi
     rm -f /etc/rc.d/S*podkop_killswitch 2>/dev/null || true
 
-    # Генерируем shell-скрипт инклуда С ИДЕМПОТЕНТНЫМИ ПРОВЕРКАМИ СУЩЕСТВОВАНИЯ ПРАВИЛ И ЦЕПОЧЕК
+    # Генерируем nft-скрипт инклуда.
     cat << 'EOF' > "$NFT_KILLSWITCH_SCRIPT"
 #!/bin/sh
 
-# 1. Проверяем и защищаем forward цепочку
-if nft list chain inet fw4 forward 2>/dev/null | grep -q "inet fw4"; then
-    if ! nft list chain inet fw4 forward 2>/dev/null | grep -q "198.18.0.0/15"; then
-        nft add rule inet fw4 forward ip daddr 198.18.0.0/15 drop 2>/dev/null
+# Вставляем правило на самое первое место цепочки для абсолютного приоритета защиты
+if nft list chain inet fw4 forward >/dev/null 2>&1; then
+    if ! nft list chain inet fw4 forward 2>/dev/null | grep -Fq "ip daddr 198.18.0.0/15 drop"; then
+        nft insert rule inet fw4 forward ip daddr 198.18.0.0/15 drop 2>/dev/null
     fi
 fi
 
-# 2. Проверяем и защищаем output цепочку
-if nft list chain inet fw4 output 2>/dev/null | grep -q "inet fw4"; then
-    if ! nft list chain inet fw4 output 2>/dev/null | grep -q "198.18.0.0/15"; then
-        nft add rule inet fw4 output ip daddr 198.18.0.0/15 drop 2>/dev/null
-    fi
-fi
-
-# 3. Динамическая проверка filter_forward (зависит от конкретной версии OpenWrt)
-if nft list chain inet fw4 filter_forward 2>/dev/null | grep -q "inet fw4"; then
-    if ! nft list chain inet fw4 filter_forward 2>/dev/null | grep -q "198.18.0.0/15"; then
-        nft add rule inet fw4 filter_forward oifname "wan" ip daddr 198.18.0.0/15 drop 2>/dev/null
+if nft list chain inet fw4 output >/dev/null 2>&1; then
+    if ! nft list chain inet fw4 output 2>/dev/null | grep -Fq "ip daddr 198.18.0.0/15 drop"; then
+        nft insert rule inet fw4 output ip daddr 198.18.0.0/15 drop 2>/dev/null
     fi
 fi
 EOF
 
-    # Делаем скрипт-инклуд исполняемым для fw4
     chmod 0755 "$NFT_KILLSWITCH_SCRIPT"
 
-    # Регистрируем инклуд через UCI API
-    if ! uci show firewall | grep -q "podkop_ks"; then
-        uci -q batch <<UCI_EOF
+    # Абсолютная декларативность. Накатываем параметры UCI принудительно для выравнивания конфига
+    uci -q batch <<UCI_EOF
 set firewall.podkop_ks=include
 set firewall.podkop_ks.type='script'
 set firewall.podkop_ks.path='$NFT_KILLSWITCH_SCRIPT'
@@ -425,10 +420,29 @@ set firewall.podkop_ks.family='any'
 set firewall.podkop_ks.reload='1'
 commit firewall
 UCI_EOF
-    fi
 
-    /etc/init.d/firewall restart >/dev/null 2>&1 || true
-    printf "${G}[ OK ] Чистый KillSwitch (ориентированный на FakeIP) успешно активирован в uci firewall.${N}\n"
+    # Информативный трекинг рестарта подсистемы
+    if ! /etc/init.d/firewall restart >/dev/null 2>&1; then
+        printf "${Y}[ WARN ] Системная команда перезапуска firewall вернула ошибку.${N}\n"
+        printf "${Y}         Переходим к прямой диагностике рантайма nftables...${N}\n"
+    fi
+    
+    # ИСПРАВЛЕНО: Академическое кэширование проверок без повторных вызовов подсистемы nft
+    res_fw=0
+    res_out=0
+    
+    check_nft_rule "forward" && res_fw=1
+    check_nft_rule "output"  && res_out=1
+
+    # Итоговый строгий вердикт
+    if [ "$res_fw" -eq 1 ] && [ "$res_out" -eq 1 ]; then
+        printf "${G}[ OK ] Полная автоматизация настроена. Железобетонный KillSwitch (Forward & Output) активен!${N}\n"
+    else
+        printf "${R}[ FAILED ] Ошибка! Защита не закрепилась в ядре nftables!${N}\n"
+        [ "$res_fw"  -eq 0 ] && printf "${R}           - Нарушена целостность цепочки FORWARD (LAN -> WAN транзит)${N}\n"
+        [ "$res_out" -eq 0 ] && printf "${R}           - Нарушена целостность цепочки OUTPUT (Трафик самого роутера)${N}\n"
+        printf "${Y}           Проверьте синтаксис таблиц nftables вручную или перезагрузите роутер.${N}\n"
+    fi
 
     return 0
 }
@@ -452,19 +466,26 @@ run_global_check() {
 }
 
 # ----------------------------------------------------------------------------
-#  Пункт меню 4 — Идеальный логический конвейер обслуживания
+#   Пункт меню 4 — Мягкий конвейер обслуживания
 # ----------------------------------------------------------------------------
 run_full_maintenance() {
-    printf "\n${C}========== MAINTENANCE CONVEYER ==========${N}\n"
+    printf "\n${C}[*] Запуск мягкого конвейера обслуживания компонентов...${N}\n"
+    
+    status_sb="${G}Успешно${N}"; status_pk="${G}Успешно${N}"; status_pt="${G}Успешно${N}"
 
-    run_update_singbox || printf "${Y}[!] Обновление ядра sing-box завершилось с ошибкой, продолжаем.${N}\n"
-    run_update_podkop  || printf "${Y}[!] Обновление структуры Podkop завершилось с ошибкой, продолжаем.${N}\n"
-    run_xhttp_patch    || printf "${Y}[!] Накатывание патча xHTTP завершилось с ошибкой, продолжаем.${N}\n"
-    run_my_curl_patch  || printf "${Y}[!] Накатывание curl-патча завершилось с ошибкой, продолжаем.${N}\n"
-    run_restart_podkop || printf "${Y}[!] Перезапуск системы завершился с ошибкой, продолжаем.${N}\n"
-    run_global_check   || printf "${Y}[!] Финальный global_check выявил предупреждения.${N}\n"
+    run_update_singbox || status_sb="${R}Ошибка (Пропущено)${N}"
+    run_update_podkop  || status_pk="${R}Ошибка (Пропущено)${N}"
+    run_apply_patches  || status_pt="${R}Ошибка (Пропущено)${N}"
+    
+    printf "\n${C}[*] Финализация процессов...${N}\n"
+    run_restart_podkop || true
+    run_global_check   || true
 
-    printf "${G}[ OK ] Конвейер обслуживания полностью завершён.${N}\n"
+    printf "\n${C}====== ОТЧЕТ ОБСЛУЖИВАНИЯ ======${N}\n"
+    printf " Обновление sing-box:  $status_sb\n"
+    printf " Обновление Podkop:    $status_pk\n"
+    printf " Применение патчей:    $status_pt\n"
+    printf "${C}================================${N}\n"
     return 0
 }
 
@@ -477,7 +498,7 @@ show_menu() {
     printf "  ${Y}1)${N} Update sing-box (EikeiDev)\n"
     printf "  ${Y}2)${N} Apply xHTTP & My curl patch\n"
     printf "  ${Y}3)${N} Setup Full Auto-Update (+ чистый KillSwitch fw4)\n"
-    printf "  ${Y}4)${N} Run Full Maintenance (Правильный порядок)\n"
+    printf "  ${Y}4)${N} Run Full Maintenance (Мягкий конвейер)\n"
     printf "  ${Y}5)${N} Restart Podkop\n"
     printf "  ${Y}6)${N} Podkop global_check\n"
     printf "  ${Y}0)${N} Exit\n"
